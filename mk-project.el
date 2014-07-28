@@ -67,6 +67,13 @@ project-grep. Optional. Example: '(\"*.class\").
 This value is not used in indexing when `mk-proj-index-find-cmd'
 is set -- or in grepping when `mk-proj-grep-find-cmd' is set.")
 
+(defvar mk-proj-ignore-path-patterns nil
+  "List of shell patterns to avoid searching for with project-find-file and
+project-grep. Optional. Example: '(\"*.class\").
+
+This value is not used in indexing when `mk-proj-index-find-cmd'
+is set -- or in grepping when `mk-proj-grep-find-cmd' is set.")
+
 (defvar mk-proj-ack-args nil
   "String of arguments to pass to the `ack' command. Optional.
 Example: \"--java\".")
@@ -85,7 +92,7 @@ is set -- or in grepping when `mk-proj-grep-find-cmd' is set.")
 not one relative to basedir. Value is expanded with expand-file-name.")
 
 (defvar mk-proj-compile-cmd nil
-  "Command to build the entire project. Can be either a string specifying 
+  "Command to build the entire project. Can be either a string specifying
 a shell command or the name of a function. Optional. Example: make -k.")
 
 (defvar mk-proj-startup-hook nil
@@ -172,6 +179,7 @@ value is not used if a custom find command is set in
                               mk-proj-basedir
                               mk-proj-src-patterns
                               mk-proj-ignore-patterns
+                              mk-proj-ignore-path-patterns
                               mk-proj-ack-args
                               mk-proj-vcs
                               mk-proj-tags-file
@@ -287,7 +295,7 @@ load time. See also `project-menu-remove'."
 
 (defun mk-proj-load-vars (proj-name proj-alist)
   "Set project variables from proj-alist"
-  (labels ((config-val (key)
+  (cl-labels ((config-val (key)
             (if (assoc key proj-alist)
                 (car (cdr (assoc key proj-alist)))
               nil))
@@ -300,7 +308,7 @@ load time. See also `project-menu-remove'."
     (setq mk-proj-name proj-name)
     (setq mk-proj-basedir (expand-file-name (config-val 'basedir)))
     ;; optional vars
-    (dolist (v '(src-patterns ignore-patterns ack-args vcs
+    (dolist (v '(src-patterns ignore-patterns ignore-path-patterns ack-args vcs
                  tags-file compile-cmd src-find-cmd grep-find-cmd
                  index-find-cmd startup-hook shutdown-hook))
       (maybe-set-var v))
@@ -515,18 +523,34 @@ load time. See also `project-menu-remove'."
         (concat (mk-proj-replace-tail name-expr "-o " "") "\\) "))
     ""))
 
+(defun mk-proj-find-cmd-src-path-args (src-patterns)
+  "Generate the ( -path <path1> -o -path <path2> ...) pattern for find cmd"
+  (if src-patterns
+      (let ((name-expr " \\("))
+        (dolist (pat src-patterns)
+          (setq name-expr (concat name-expr " -path \"" pat "\" -o ")))
+        (concat (mk-proj-replace-tail name-expr "-o " "") "\\) "))
+    ""))
+
 (defun mk-proj-find-cmd-ignore-args (ignore-patterns)
   "Generate the -not ( -name <pat1> -o -name <pat2> ...) pattern for find cmd"
   (if ignore-patterns
       (concat " -not " (mk-proj-find-cmd-src-args ignore-patterns))
     ""))
 
+(defun mk-proj-find-cmd-ignore-path-args (ignore-patterns)
+  "Generate the -not ( -path <path1> -o -path <path2> ...) pattern for find cmd"
+  (if ignore-patterns
+      (concat " -not " (mk-proj-find-cmd-src-path-args ignore-patterns))
+    ""))
+
+
 ;; ---------------------------------------------------------------------
 ;; Grep
 ;; ---------------------------------------------------------------------
 
 (defun project-grep (&optional phrase from-current-dir)
-  "Run find-grep on the project's basedir, excluding files in 
+  "Run find-grep on the project's basedir, excluding files in
 mk-proj-ignore-patterns, tag files, etc.
 
 If the phrase argument is not included, it will prompt for a
@@ -546,6 +570,8 @@ C-u prefix, start from the current directory."
                                mk-proj-basedir))))
     (when mk-proj-ignore-patterns
       (setq find-cmd (concat find-cmd (mk-proj-find-cmd-ignore-args mk-proj-ignore-patterns))))
+    (when mk-proj-ignore-path-patterns
+      (setq find-cmd (concat find-cmd (mk-proj-find-cmd-ignore-path-args mk-proj-ignore-path-patterns))))
     (when mk-proj-tags-file
       (setq find-cmd (concat find-cmd " -not -name 'TAGS'")))
     (when (mk-proj-get-vcs-path)
@@ -660,7 +686,7 @@ With C-u prefix, start ack from the current directory."
     (message "Failed to generate the %s buffer!" mk-proj-fib-name))))
 
 (defun project-index ()
-  "Regenerate the *file-index* buffer that is used for project-find-file"
+  "Regenerate the *file-index* buffer that is used for project-find-file."
   (interactive)
   (mk-proj-assert-proj)
   (when mk-proj-file-list-cache
@@ -668,7 +694,8 @@ With C-u prefix, start ack from the current directory."
     (let* ((default-directory (file-name-as-directory mk-proj-basedir))
            (start-dir (if mk-proj-file-index-relative-paths "." mk-proj-basedir))
            (find-cmd (concat "find '" start-dir "' -type f "
-                            (mk-proj-find-cmd-ignore-args mk-proj-ignore-patterns)))
+                            (mk-proj-find-cmd-ignore-args mk-proj-ignore-patterns)
+                            (mk-proj-find-cmd-ignore-path-args mk-proj-ignore-path-patterns)))
            (proc-name "index-process"))
       (when (mk-proj-get-vcs-path)
         (setq find-cmd (concat find-cmd " -not -path " (mk-proj-get-vcs-path))))
@@ -756,6 +783,14 @@ selection of the file. See also: `project-index',
     (message "Please use project-index to create the index before running project-find-file-ido")
     (return-from "project-find-file-ido" nil))
   (let ((file (ido-completing-read "Find file in project matching (ido): "
+                                   ;;(mapcar '(lambda (path)
+                                             ;; format path for display in ido list
+                                             ;; (setq key (replace-regexp-in-string "\\(.*?\\)\\([^/]+?\\)$" "\\2 - \\1" path))
+                                             ;; strip project root
+                                             ;; (setq key (replace-regexp-in-string "\./" "" key))
+                                             ;; remove trailing | or /
+                                             ;;(setq key (replace-regexp-in-string "\\(|\\|/\\)$" "" key))
+                                   ;;          )(mk-proj-fib-matches nil)))))
                                    (mk-proj-fib-matches nil))))
     (when file
       (find-file (concat (file-name-as-directory mk-proj-basedir) file)))))
@@ -763,7 +798,7 @@ selection of the file. See also: `project-index',
 (defun project-multi-occur (regex)
   "Search all open project files for 'regex' using `multi-occur'"
   (interactive "sRegex: ")
-  (multi-occur (mk-proj-filter (lambda (b) (if (buffer-file-name b) b nil)) 
+  (multi-occur (mk-proj-filter (lambda (b) (if (buffer-file-name b) b nil))
                                (mk-proj-buffers))
                regex))
 
@@ -811,7 +846,7 @@ project is not loaded."
   (interactive)
   (global-unset-key [menu-bar mkproject]))
 
-(when mk-proj-menu-on 
+(when mk-proj-menu-on
   (project-menu))
 
 (provide 'mk-project)
