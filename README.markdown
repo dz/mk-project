@@ -1,6 +1,27 @@
 mk-project.el: An Emacs project library
 =======================================
 
+What does this fork do?
+-----------------------
+
+This fork adds a new ``ignore-path-patterns`` option when define a proejct.  This lets the `find` command that 
+runs when grepping or indexing the file list cache ignore certain directories.
+
+Usage:
+
+    (project-def "my-java-project"
+          '((basedir          "/home/me/my-java-project/")
+            (src-patterns     ("*.java" "*.jsp"))
+            (ignore-patterns  ("*.class" "*.wsdl"))
+            (ignore-path-patterns ("*/log/*" "*/tmp/*"))
+            (tags-file        "/home/me/.my-java-project/TAGS")
+            (file-list-cache  "/home/me/.my-java-project/files")
+            (open-files-cache "/home/me/.my-java-project/open-files")
+            (vcs              git)
+            (startup-hook     nil)
+            (shutdown-hook    nil)))
+    
+
 What is it?
 -----------
 
